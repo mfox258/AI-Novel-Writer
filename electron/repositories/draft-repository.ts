@@ -475,7 +475,7 @@ export class DraftRepository {
     }
 
     /** 更新草稿正文（同时更新 contents 表） */
-    static updateContent(id: number, content: string, wordCount: number): void {
+    static updateContent(id: number, content: string, wordCount: number, expectedContent?: string): void {
         const db = getProjectDb()
         if (!db) throw new Error('[DraftRepository] 数据库未连接')
         db.transaction(() => {
@@ -487,6 +487,15 @@ export class DraftRepository {
             if (!target) throw new Error(`草稿不存在：${id}`)
             if (target.status === 'finalized') {
                 throw new Error('已定稿正文为不可变事实；如需再编辑，请创建新草稿或处理定稿冲突')
+            }
+            const current = db.prepare('SELECT body FROM contents WHERE id = ?')
+                .get(target.content_id) as { body: string } | undefined
+            if (!current) throw new Error('草稿正文记录不存在')
+            // Compare the renderer's last confirmed body inside the write
+            // transaction. Empty text is a valid baseline, not an absent one.
+            if (expectedContent !== undefined && current.body !== expectedContent) {
+                throw Object.assign(new Error('草稿正文已变化，请保留本地编辑并重新打开最新正文后合并'),
+                    { code: 'DRAFT_SAVE_CONFLICT' as const })
             }
             const updated = db.prepare('UPDATE contents SET body = ? WHERE id = ?').run(content, target.content_id)
             if (updated.changes !== 1) throw new Error('草稿正文记录不存在')

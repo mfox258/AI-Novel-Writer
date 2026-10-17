@@ -182,6 +182,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const finalizationPending = editorTab?.finalizationPublication === 'pending'
   const finalizationConflict = editorTab?.finalizationConflict
   const currentBodyRef = useRef(content)
+  const saveInFlight = useRef(false)
 
   /** 保存（ai-novel://draft/ 走 DB，其他走 FS） */
   const doSave = async (draftContent: string, propagateFailure = false) => {
@@ -197,10 +198,15 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       || status === 'finalized'
       || status === 'archived'
     ) return
+    if (saveInFlight.current) {
+      if (propagateFailure) throw new Error(text('正文正在保存，请稍后重试', 'A save is in progress. Please retry shortly.'))
+      return
+    }
     const saveSnapshot = {
       content: targetTab.content ?? draftContent,
       contentRevision: targetTab.contentRevision ?? 0,
     }
+    saveInFlight.current = true
     setSaving(true)
     setSaveOutcome('idle')
     try {
@@ -208,6 +214,9 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       if (!resourceWriteAllowed(filePath) || resource?.kind !== 'draft') throw new Error('资源只读或无效')
       {
         const draftId = resource.id
+        if (typeof targetTab.savedContent !== 'string') {
+          throw new Error(text('缺少已保存正文基线，请保留编辑并重新打开正文', 'The saved baseline is missing. Keep your edits and reopen the draft.'))
+        }
         const result = await ipc.invokeWithProjectSession(
           projectSession,
           'db:draft-update-content',
@@ -215,7 +224,12 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           saveSnapshot.content,
           countDraftUnits(saveSnapshot.content),
           projectSession.projectPath,
+          targetTab.savedContent,
         )
+        if (result.errorCode === 'DRAFT_SAVE_CONFLICT') {
+          throw new Error(text('正文已被其他操作修改，本地编辑已保留。请复制本地内容，再重新打开最新正文进行合并。',
+            'The draft changed elsewhere. Your local edits are retained. Copy them, then reopen the latest draft to merge.'))
+        }
         if (!result.success) throw new Error(result.error || text('草稿保存失败', 'Could not save the draft'))
       }
       if (!isProjectSessionCurrent(projectSession)) return
@@ -234,6 +248,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       }
       if (propagateFailure) throw error
     } finally {
+      saveInFlight.current = false
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
   }

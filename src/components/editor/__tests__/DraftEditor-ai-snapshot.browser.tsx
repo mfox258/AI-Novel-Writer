@@ -193,6 +193,7 @@ describe('DraftEditor AI source snapshot', () => {
       SCREEN_BODY,
       SCREEN_BODY.length,
       PROJECT_PATH,
+      SAVED_BODY,
       PROJECT_SESSION,
     ])
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:draft-get-full')).toBe(false)
@@ -242,6 +243,24 @@ describe('DraftEditor AI source snapshot', () => {
     },
   )
 
+  it('retains local edits and their baseline when a save conflicts', async () => {
+    const originalInvoke = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:draft-update-content') {
+        return { success: false, errorCode: 'DRAFT_SAVE_CONFLICT' }
+      }
+      return originalInvoke(channel, ...args)
+    })
+    const errorToast = vi.spyOn(toast, 'error').mockImplementation(() => {})
+    await act(async () => page.getByRole('button', { name: '保存', exact: true }).click())
+    await vi.waitFor(() => expect(container.textContent).toContain('保存失败'))
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({
+      content: SCREEN_BODY, savedContent: SAVED_BODY, dirty: true,
+    })
+    expect(errorToast).toHaveBeenCalledWith(expect.stringContaining('本地编辑已保留'))
+    errorToast.mockRestore()
+  })
+
   it('reports shortcut failure, retries, and keeps concurrent input dirty', async () => {
     const originalInvoke = invoke.getMockImplementation() as
       | ((channel: string, ...args: unknown[]) => unknown)
@@ -269,6 +288,10 @@ describe('DraftEditor AI source snapshot', () => {
 
     await act(async () => page.getByRole('button', { name: '保存', exact: true }).click())
     await vi.waitFor(() => expect(container.textContent).toContain('保存中'))
+    await act(async () => view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 's', ctrlKey: true, bubbles: true, cancelable: true,
+    })))
+    expect(saveAttempt).toBe(2)
     await act(async () => view.dispatch({
       changes: { from: view.state.doc.length, insert: '继续输入' },
     }))
@@ -280,6 +303,8 @@ describe('DraftEditor AI source snapshot', () => {
     await act(async () => page.getByRole('button', { name: '保存', exact: true }).click())
     await vi.waitFor(() => expect(container.textContent).toContain('已保存'))
     expect(useEditorStore.getState().tabs[0]).toMatchObject({ dirty: false })
+    const writes = invoke.mock.calls.filter(([channel]) => channel === 'db:draft-update-content')
+    expect(writes.map(call => call[5])).toEqual([SAVED_BODY, SAVED_BODY, SCREEN_BODY])
 
     await act(async () => view.dispatch({
       changes: { from: view.state.doc.length, insert: '保存后再改' },

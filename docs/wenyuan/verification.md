@@ -43,3 +43,15 @@ pnpm exec vite build
 只读独立审查确认首次宿主实现缓存启动Promise，导致停用后再启动成功返回但不激活。已清理停止后的启动缓存，并增加重启及并发生命周期回归。审查提出旧蓝图/世界/剧情/历史入口未随停用撤下、菜单可能残留：已接线撤下和关闭菜单；浏览器已确认停用撤下、重启恢复全部旧小说快捷入口。
 
 实际UI视图仍是宿主对旧小说组件的适配，不是完整受限功能插件。第三方代码隔离、授权撤销执行、逐次保存不可变修订/并发幂等、全量旧项目迁移、Electron安装包及正式发布本批未验证。
+
+## 续批：正文保存基线保护（2026-10-17）
+
+使用nvm已安装的`D:/software/nvm/v22.22.0/node.exe`，未切换全局默认版本。
+
+- 4个单测文件、46项通过：`draft-save-atomicity`、`db-controller-project-context`、`manual-manuscript-persistence`、`draft-store-merge-revision`。覆盖过期基线拒绝且正文/字数不变、空正文基线、缺少IPC基线拒绝、稳定冲突码和原有事务回滚。
+- 3个浏览器文件、10项通过：`DraftEditor-ai-snapshot`、`DraftEditor-revision-source`、`v3-editor-navigation`。覆盖冲突后保留本地正文/基线/dirty、AI冻结快照、保存中输入后下次使用正确基线、切换标签保存。
+- TypeScript `--noEmit`、7个变更源码/测试文件的ESLint（零警告）、`git diff --check`通过。
+- 追加定稿保护、草稿来源依赖和编辑器物理保存回归：3个文件、17项通过；单测合计7个文件、63项。i18n文案覆盖检查通过。
+- 独立只读审查未发现阻塞问题；审查者另行运行仓储/controller 40项和相关浏览器7项通过。重复快捷键保护补充后，`DraftEditor-ai-snapshot`浏览器7项再次通过。
+
+本批不改物理schema和可移植格式；未运行新安装包或原生Electron交互验证。正文相等校验不代表持久修订号校验或幂等重放。不可变保存历史和迁移/导出闭包仍待实施。

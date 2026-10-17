@@ -902,17 +902,24 @@ export function registerDatabaseController() {
     }
   })
 
-  ipcMain.handle('db:draft-update-content', async (_event, id: number, content: string, wordCount: number, expectedProjectPath: string) => {
+  ipcMain.handle('db:draft-update-content', async (_event, id: number, content: string, wordCount: number, expectedProjectPath: string, expectedContent: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      if (typeof expectedContent !== 'string') throw new Error('缺少已保存正文基线，已拒绝覆盖保存')
+      if (typeof content !== 'string' || !Number.isSafeInteger(wordCount) || wordCount < 0) {
+        throw new Error('正文保存参数无效')
+      }
       const draft = DraftRepository.getMeta(id)
       if (!draft) throw new Error(`草稿不存在：${id}`)
       if (draft.status === 'finalized') {
         throw new Error('已定稿正文为只读内容，不能再修改')
       }
-      DraftRepository.updateContent(id, content, wordCount)
+      DraftRepository.updateContent(id, content, wordCount, expectedContent)
       return { success: true }
     } catch (err) {
+      if (err && typeof err === 'object' && 'code' in err && err.code === 'DRAFT_SAVE_CONFLICT') {
+        return { success: false, error: String(err), errorCode: 'DRAFT_SAVE_CONFLICT' as const }
+      }
       return { success: false, error: String(err) }
     }
   })

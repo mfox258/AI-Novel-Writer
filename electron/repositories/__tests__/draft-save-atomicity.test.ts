@@ -20,6 +20,19 @@ beforeEach(() => {
 afterEach(() => { db.close(); vi.clearAllMocks() })
 
 describe('manual draft save atomicity', () => {
+  it('rejects a stale writer without changing the winning body or metadata', () => {
+    DraftRepository.updateContent(1, 'winner', 6, 'original')
+    expect(() => DraftRepository.updateContent(1, 'stale', 5, 'original'))
+      .toThrow(expect.objectContaining({ code: 'DRAFT_SAVE_CONFLICT' }))
+    expect(db.prepare('SELECT body FROM contents WHERE id=1').get()).toEqual({ body: 'winner' })
+    expect(db.prepare('SELECT word_count FROM drafts WHERE id=1').get()).toEqual({ word_count: 6 })
+  })
+  it('checks an empty baseline and does not confuse it with no baseline', () => {
+    DraftRepository.updateContent(1, '', 0, 'original')
+    DraftRepository.updateContent(1, 'after empty', 11, '')
+    expect(() => DraftRepository.updateContent(1, 'stale empty', 11, ''))
+      .toThrow(expect.objectContaining({ code: 'DRAFT_SAVE_CONFLICT' }))
+  })
   it('rolls back the body when metadata persistence fails', () => {
     db.exec(`CREATE TRIGGER fail_metadata BEFORE UPDATE ON drafts
       BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END;`)

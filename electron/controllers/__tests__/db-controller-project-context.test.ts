@@ -963,6 +963,19 @@ describe('database controller project context guard', () => {
     expect(mocks.draftListAll).toHaveBeenCalledOnce()
   })
 
+  it('rejects unguarded content updates and exposes stable conflict results', async () => {
+    await expect(handler('db:draft-update-content')({}, 1, 'new', 3, 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false, error: expect.stringContaining('基线') })
+    expect(mocks.draftUpdateContent).not.toHaveBeenCalled()
+    mocks.draftGetMeta.mockReturnValueOnce({ id: 1, status: 'draft' })
+    mocks.draftUpdateContent.mockImplementationOnce(() => {
+      throw Object.assign(new Error('changed'), { code: 'DRAFT_SAVE_CONFLICT' })
+    })
+    await expect(handler('db:draft-update-content')({}, 1, 'new', 3, 'C:/projects/A', ''))
+      .resolves.toMatchObject({ success: false, errorCode: 'DRAFT_SAVE_CONFLICT' })
+    expect(mocks.draftUpdateContent).toHaveBeenCalledWith(1, 'new', 3, '')
+  })
+
   it('rejects content updates for finalized database drafts', async () => {
     mocks.draftGetMeta.mockReturnValueOnce({
       id: 1,
@@ -977,6 +990,7 @@ describe('database controller project context guard', () => {
       'attempted overwrite',
       19,
       'C:/projects/A',
+      'original',
     )).resolves.toMatchObject({
       success: false,
       error: expect.stringContaining('已定稿正文为只读内容'),

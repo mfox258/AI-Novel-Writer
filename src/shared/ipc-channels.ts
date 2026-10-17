@@ -1074,7 +1074,7 @@ export interface DatabaseChannels {
   }
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }
-  'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string, expectedContent: string]; return: { success: boolean; error?: string; errorCode?: 'DRAFT_SAVE_CONFLICT' } }
   'db:draft-delete': {
     args: [id: number, expectedProjectPath: string]
     return: {
