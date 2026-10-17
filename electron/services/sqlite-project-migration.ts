@@ -41,6 +41,9 @@ export interface ProjectSqliteEvidence {
   domain: { tableCounts: Record<string, number>; authorContentHash: string }
   preIdentityDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preAssetDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  /** Cross-version comparison only; current domain always includes save history. */
+  preHistoryDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  saveHistoryDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
 }
 
 function regular(file: string): void {
@@ -102,7 +105,8 @@ const quoteIdentifier = (value: string) => '"' + value.replaceAll('"', '""') + '
 const M05_ASSET_TABLES = ['character_avatar_assets', 'character_avatar_unresolved'] as const
 function domainColumns(db: BetterSqlite3.Database, preIdentity = false, preAsset = false): DomainColumns {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]
-  const postLegacyTables = [...M02_AUXILIARY_TABLES, ...M03_REVIEW_CYCLE_TABLES, ...M05_ASSET_TABLES] as readonly string[]
+  const postLegacyTables = [...M02_AUXILIARY_TABLES, ...M03_REVIEW_CYCLE_TABLES, ...M05_ASSET_TABLES,
+    'draft_save_history'] as readonly string[]
   return tables.filter(({ name }) => (!preIdentity || !postLegacyTables.includes(name))
     && (!preAsset || !(M05_ASSET_TABLES as readonly string[]).includes(name))).map(({ name }) => ({ name,
     columns: (db.prepare(`PRAGMA table_info(${quoteIdentifier(name)})`).all() as { name: string }[]).map(column => column.name)
@@ -127,7 +131,11 @@ function inspect(db: BetterSqlite3.Database, registry: MigrationRegistry, target
   const result = targetVersion === undefined ? probeSchema(adapter, registry) : verifySchema(adapter, registry, targetVersion)
   return { schemaVersion: result.version, fingerprint: result.fingerprint, domain: domain(db),
     ...(result.version >= 3 ? { preIdentityDomain: domain(db, domainColumns(db, true)) } : {}),
-    ...(result.version >= 6 ? { preAssetDomain: domain(db, domainColumns(db, false, true)) } : {}) }
+    ...(result.version >= 6 ? { preAssetDomain: domain(db, domainColumns(db, false, true)) } : {}),
+    ...(result.version >= 8 ? {
+      preHistoryDomain: domain(db, domainColumns(db).filter(table => table.name !== 'draft_save_history')),
+      saveHistoryDomain: domain(db, domainColumns(db).filter(table => table.name === 'draft_save_history')),
+    } : {}) }
 }
 function qualifiedLegacySource(db: BetterSqlite3.Database): string | null {
   const adapter = new SqliteSchemaAdapter(db)
@@ -261,7 +269,7 @@ export function upgradeProjectSqlite(options: { databasePath: string; registry?:
   const registry = options.registry ?? getDesktopMigrationRegistry()
   const before = probeProjectSqlite({ databasePath: options.databasePath, registry })
   if (before.schemaVersion === CURRENT_DESKTOP_SCHEMA_VERSION) return verifyProjectSqlite({ ...options, registry })
-  if (![1, 2, 3, 4, 5, 6].includes(before.schemaVersion)) throw new Error('CANONICAL_SCHEMA_UPGRADE_UNSUPPORTED')
+  if (![1, 2, 3, 4, 5, 6, 7].includes(before.schemaVersion)) throw new Error('CANONICAL_SCHEMA_UPGRADE_UNSUPPORTED')
   sourceFile(options.databasePath)
   const database = new Database(options.databasePath, { fileMustExist: true })
   try {

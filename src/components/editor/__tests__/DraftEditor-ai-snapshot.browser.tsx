@@ -244,7 +244,7 @@ describe('DraftEditor AI source snapshot', () => {
   )
 
   it('retains local edits and their baseline when a save conflicts', async () => {
-    const originalInvoke = invoke.getMockImplementation()!
+    const originalInvoke = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => unknown
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'db:draft-update-content') {
         return { success: false, errorCode: 'DRAFT_SAVE_CONFLICT' }

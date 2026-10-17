@@ -549,11 +549,11 @@ async function installedReceipt(
   try {
     const freeze = readPortableRuntimeFreeze(targetRoot)
     if (!freeze.active) return null
-    verifyProjectSqlite({ databasePath })
+    verifyProjectSqlite({ databasePath, targetVersion: installedAuthority.sourceSchemaVersion })
     const database = new BetterSqlite(databasePath, { readonly: true, fileMustExist: true })
     try {
       database.pragma('foreign_keys = ON')
-      assertPortableSourceSchema(database)
+      assertPortableSourceSchema(database, installedAuthority.sourceSchemaVersion)
       verifyPortableTransferAuthority(database, installedAuthority, freeze)
     } finally { database.close() }
     const knowledgeEntry = entries.find(entry => entry.path === PORTABLE_KNOWLEDGE_SOURCE_PATH)
@@ -773,6 +773,7 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
       } catch { fail('PORTABLE_RESTORE_INVALID') }
     }
     if (authority.targetProjectId !== null || authority.originProjectId !== extracted.manifest.originProjectId
+      || authority.sourceSchemaVersion !== extracted.manifest.sourceSchemaVersion
       || authority.snapshotGeneration !== extracted.manifest.snapshotGeneration
       || authority.portableDatabaseSha256 !== databaseEntry.sha256
       || !extracted.manifest.transferReceiptIds.includes(authority.receiptId)
@@ -780,11 +781,12 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
     const freezeBytes = readPhysicalFile(freezePath, PORTABLE_RUNTIME_HISTORY_MAX_BYTES).bytes
     assertFreeze(json(freezeBytes), authority.originProjectId, authority.snapshotGeneration)
     const freeze = parsePortableRuntimeFreeze(freezeBytes)
-    verifyProjectSqlite({ databasePath })
+    // Preserve receipt-bound bytes. The existing project-open migration gate upgrades v7.
+    verifyProjectSqlite({ databasePath, targetVersion: authority.sourceSchemaVersion })
     const database = new BetterSqlite(databasePath, { readonly: true, fileMustExist: true })
     try {
       database.pragma('foreign_keys = ON')
-      assertPortableSourceSchema(database)
+      assertPortableSourceSchema(database, authority.sourceSchemaVersion)
       verifyPortableTransferAuthority(database, authority, freeze)
     } finally {
       database.close()

@@ -25,13 +25,14 @@ import { extractPortableProjectArchive, writePortableProjectArchive } from '../p
 import type { PortableProjectManifest } from '../portable-project-format'
 import { exportPortableProject, type ExportPortableProjectInput } from '../project-archive-service'
 import { restorePortableProject } from '../project-restore-service'
-import { parsePortableTransferAuthority } from '../portable-transfer-authority'
+import { createPortableTransferAuthority, parsePortableTransferAuthority } from '../portable-transfer-authority'
+import { assertPortableSourceSchema } from '../portable-project-format'
 import { createPortableProjectAssetProvider } from '../portable-project-assets'
 import { activateCanonicalProjectData, deactivateProjectData } from '../project-data-locator'
 import { importLegacyProjectCopy } from '../legacy-project-copy-import'
 import { ChapterDeletionRepository } from '../../repositories/chapter-deletion-repository'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
-import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
+import { parsePortableRuntimeFreeze, readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture'
 import { readDocumentCopy } from '../../knowledge-base'
 import { captureGenerationKnowledge } from '../generation-knowledge-source'
@@ -205,6 +206,117 @@ afterEach(() => {
 })
 
 describe('portable project restore service', { timeout: 20_000 }, () => {
+  it('round-trips every save-history row unchanged without reseeding and retains live append-only triggers', async () => {
+    const f = fixture()
+    const sourcePath = path.join(f.sourceStorage, 'project.db')
+    const source = new Database(sourcePath)
+    const bodies = ['第一版 C:\\作者\\正文.txt', '第二版 secretRef 只是作者文字', '第三版\n完整正文']
+    let expected: unknown[]
+    try {
+      source.exec("INSERT INTO contents(id,body) VALUES(3,''); INSERT INTO drafts(id,chapter_number,version,content_id) VALUES(3,2,1,3)")
+      for (const body of bodies) source.prepare('UPDATE contents SET body=? WHERE id=3').run(body)
+      expected = source.prepare('SELECT id,draft_id,body,created_at FROM draft_save_history ORDER BY id').all()
+      expect(source.prepare('SELECT body FROM draft_save_history WHERE draft_id=3 ORDER BY id').pluck().all()).toEqual(['', ...bodies])
+    } finally { source.close() }
+    const original = fs.readFileSync(sourcePath)
+    await exportPortableProject(exportInput(f))
+    expect(fs.readFileSync(sourcePath)).toEqual(original)
+    const receipt = await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+    const restoredPath = path.join(f.targetRoot, '.ai-novel', 'project.db')
+    const restored = new Database(restoredPath)
+    try {
+      expect(restored.pragma('user_version', { simple: true })).toBe(8)
+      expect(restored.prepare('SELECT id,draft_id,body,created_at FROM draft_save_history ORDER BY id').all()).toEqual(expected!)
+      expect(sha256(fs.readFileSync(restoredPath))).toBe(receipt.portableDatabaseSha256)
+    } finally { restored.close() }
+    initProjectDatabase(f.targetRoot)
+    const current = getProjectDb()!
+    expect(current.prepare('SELECT id,draft_id,body,created_at FROM draft_save_history ORDER BY id').all()).toEqual(expected!)
+    expect(() => current.exec("UPDATE draft_save_history SET body='tampered' WHERE draft_id=3")).toThrow('DRAFT_SAVE_HISTORY_IMMUTABLE')
+    const lastId = current.prepare('SELECT MAX(id) FROM draft_save_history').pluck().get() as number
+    current.prepare('UPDATE contents SET body=? WHERE id=3').run('恢复后保存')
+    expect(current.prepare('SELECT body FROM draft_save_history WHERE draft_id=3 ORDER BY id').pluck().all())
+      .toEqual(['', ...bodies, '恢复后保存'])
+    expect(current.prepare('SELECT MAX(id) FROM draft_save_history').pluck().get()).toBeGreaterThan(lastId)
+    closeProjectDatabase()
+    // Re-export is another physical snapshot, not a draft INSERT loop.
+    const reexport = path.join(f.base, 'reexport-history.ainovel')
+    await exportPortableProject({ ...exportInput(f), sourceProjectRoot: f.targetRoot,
+      projectSession: { projectId: receipt.targetProjectId, projectPath: f.targetRoot, leaseId: 'restored' },
+      targetArchivePath: reexport })
+    const secondTarget = path.join(f.base, 'second-history-restore')
+    await restorePortableProject({ archivePath: reexport, targetProjectRoot: secondTarget })
+    const second = new Database(path.join(secondTarget, '.ai-novel', 'project.db'), { readonly: true })
+    try {
+      expect(second.prepare('SELECT body FROM draft_save_history WHERE draft_id=3 ORDER BY id').pluck().all())
+        .toEqual(['', ...bodies, '恢复后保存'])
+    } finally { second.close() }
+  })
+
+  it('restores a registry-verified schema 7 package byte-identically then seeds once through project-open M07', async () => {
+    const f = await exportedFixture()
+    const unpackParent = path.join(f.base, 'legacy-package')
+    fs.mkdirSync(unpackParent)
+    const unpacked = await extractPortableProjectArchive({ archivePath: f.archive, stagingParentPath: unpackParent })
+    const databasePath = path.join(unpacked.stagingPath, 'project.db')
+    const legacy = new Database(databasePath)
+    try {
+      // Reconstruct the registered v7 DDL, not a user_version-only relabelled v8 fork.
+      const triggers = legacy.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'draft_save_history_%'")
+        .all() as Array<{ name: string }>
+      for (const { name } of triggers) legacy.exec(`DROP TRIGGER "${name.replaceAll('"', '""')}"`)
+      legacy.exec('DROP TABLE draft_save_history; PRAGMA user_version=7')
+      assertPortableSourceSchema(legacy, 7)
+    } finally { legacy.close() }
+    const legacyBytes = fs.readFileSync(databasePath)
+    const legacyDb = new Database(databasePath, { readonly: true })
+    const authorityPath = path.join(unpacked.stagingPath, '.ai-novel', 'portable-transfer-authority.json')
+    let authority
+    try {
+      authority = { ...createPortableTransferAuthority({ database: legacyDb,
+        freeze: parsePortableRuntimeFreeze(fs.readFileSync(path.join(unpacked.stagingPath, 'portable-runtime-freeze.json'))),
+        originProjectId: f.sourceProjectId, snapshotGeneration: unpacked.manifest.snapshotGeneration,
+        portableDatabaseSha256: sha256(legacyBytes) }), sourceSchemaVersion: 7 }
+    } finally { legacyDb.close() }
+    expect(parsePortableTransferAuthority(authority).sourceSchemaVersion).toBe(7)
+    fs.writeFileSync(authorityPath, JSON.stringify(authority))
+    const entries = unpacked.manifest.entries.map(entry => {
+      const bytes = fs.readFileSync(path.join(unpacked.stagingPath, ...entry.path.split('/')))
+      return { ...entry, byteSize: bytes.length, sha256: sha256(bytes) }
+    })
+    const total = entries.reduce((sum, entry) => sum + entry.byteSize, 0)
+    const semanticCounts = { ...unpacked.manifest.semanticCounts }
+    delete semanticCounts['table.draft_save_history']
+    const archive = path.join(f.base, 'legacy-schema7.ainovel')
+    const legacyManifest: PortableProjectManifest = { ...unpacked.manifest, sourceSchemaVersion: 7,
+      entries, semanticCounts, transferReceiptIds: [authority.receiptId],
+      declaredCompressedBytes: total, declaredUncompressedBytes: total }
+    const sources = entries.map(entry => ({ entry, sourcePath: path.join(unpacked.stagingPath, ...entry.path.split('/')) }))
+    await writePortableProjectArchive({ targetPath: archive, manifest: legacyManifest, sources })
+    const mismatchedArchive = path.join(f.base, 'mismatched-schema.ainovel')
+    await writePortableProjectArchive({ targetPath: mismatchedArchive,
+      manifest: { ...legacyManifest, sourceSchemaVersion: 8 }, sources })
+    const rejectedTarget = path.join(f.base, 'rejected-schema-target')
+    await expect(restorePortableProject({ archivePath: mismatchedArchive, targetProjectRoot: rejectedTarget }))
+      .rejects.toThrow('PORTABLE_RESTORE_INVALID')
+    expect(fs.existsSync(rejectedTarget)).toBe(false)
+    const receipt = await restorePortableProject({ archivePath: archive, targetProjectRoot: f.targetRoot })
+    const restoredPath = path.join(f.targetRoot, '.ai-novel', 'project.db')
+    expect(fs.readFileSync(restoredPath)).toEqual(legacyBytes)
+    expect(await restorePortableProject({ archivePath: archive, targetProjectRoot: f.targetRoot })).toEqual(receipt)
+    initProjectDatabase(f.targetRoot)
+    const current = getProjectDb()!
+    expect(current.pragma('user_version', { simple: true })).toBe(8)
+    expect(current.prepare('SELECT draft_id,body FROM draft_save_history ORDER BY draft_id').all()).toEqual(
+      current.prepare('SELECT d.id AS draft_id,c.body FROM drafts d JOIN contents c ON c.id=d.content_id ORDER BY d.id').all())
+    expect(readPortableCurrentAuthority({ database: current, projectStorageRoot: path.join(f.targetRoot, '.ai-novel'),
+      projectId: receipt.targetProjectId })?.originProjectId).toBe(f.sourceProjectId)
+    const count = current.prepare('SELECT COUNT(*) FROM draft_save_history').pluck().get()
+    closeProjectDatabase()
+    initProjectDatabase(f.targetRoot)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM draft_save_history').pluck().get()).toBe(count)
+  })
+
   it('archives a verified legacy copy with readable unreceipted prose while rejecting new unreceipted finalizations', async () => {
     const f = fixture(), legacyRoot = path.join(f.base, 'legacy'), legacyStorage = path.join(legacyRoot, '.vela')
     fs.mkdirSync(legacyStorage, { recursive: true })

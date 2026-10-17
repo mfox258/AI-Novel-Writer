@@ -9,6 +9,7 @@ import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import CodeMirrorEditor from './CodeMirrorEditor'
 import ThreeWayMerge from './ThreeWayMerge'
+import DraftSaveHistoryDialog from './DraftSaveHistoryDialog'
 import { Button } from '../ui/Button'
 import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
@@ -77,6 +78,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     state => state.tabs.find(tab => tab.id === tabId && tab.projectKey === projectKey),
   )
   const currentProject = useProjectStore(s => s.currentProject)
+  const [historySession] = useState(() => captureProjectSession(currentProject))
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
   const projectMatches = currentProject?.path === projectKey
@@ -183,6 +185,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const finalizationConflict = editorTab?.finalizationConflict
   const currentBodyRef = useRef(content)
   const saveInFlight = useRef(false)
+  const [saveHistoryOpen, setSaveHistoryOpen] = useState(false)
 
   /** 保存（ai-novel://draft/ 走 DB，其他走 FS） */
   const doSave = async (draftContent: string, propagateFailure = false) => {
@@ -654,6 +657,8 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* 顶部工具栏 */}
+      {saveHistoryOpen && meta && historySession && <DraftSaveHistoryDialog key={meta.id}
+        draftId={meta.id} session={historySession} onClose={() => setSaveHistoryOpen(false)} />}
       <div
         className="flex items-center justify-between gap-2 px-3 h-9 flex-shrink-0"
         style={{
@@ -711,6 +716,10 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
             )}
 
             {/* 状态标签 */}
+            <Button variant="outline" size="sm" disabled={!meta || saving}
+              onClick={() => setSaveHistoryOpen(true)}>
+              {text('保存历史', 'Save history')}
+            </Button>
             <span
               className="text-[0.7rem] px-1.5 py-0.5 rounded flex-shrink-0"
               style={{

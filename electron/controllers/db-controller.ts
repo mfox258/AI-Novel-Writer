@@ -26,6 +26,7 @@ import { commitAuthorCharacterRoster } from '../services/character-roster-author
 import { CharacterRosterRepository } from '../repositories/character-roster-repository'
 import type { CharacterRosterCommitRequest } from '../../src/shared/character-roster'
 import { DraftRepository } from '../repositories/draft-repository'
+import { DraftSaveHistoryRepository } from '../repositories/draft-save-history-repository'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { FinalizedDraftImportRepository } from '../repositories/finalized-draft-import-repository'
 import { FinalizationRepository } from '../repositories/finalization-repository'
@@ -100,6 +101,7 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:draft-create',
   'db:draft-update-status',
   'db:draft-update-content',
+  'db:draft-save-history-restore',
   'db:draft-delete',
   'db:recovery-candidate-record',
   'db:recovery-candidate-update',
@@ -922,6 +924,21 @@ export function registerDatabaseController() {
       }
       return { success: false, error: String(err) }
     }
+  })
+
+  ipcMain.handle('db:draft-save-history-list', async (_event, draftId: number, expectedProjectPath: string, beforeId?: number) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return DraftSaveHistoryRepository.list(draftId, beforeId)
+  })
+  ipcMain.handle('db:draft-save-history-get', async (_event, draftId: number, historyId: number, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return DraftSaveHistoryRepository.get(draftId, historyId)
+  })
+  ipcMain.handle('db:draft-save-history-restore', async (_event, draftId: number, historyId: number, expectedProjectPath: string) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      return { success: true, id: DraftSaveHistoryRepository.restore(draftId, historyId) }
+    } catch (error) { return { success: false, error: String(error) } }
   })
 
   ipcMain.handle('db:draft-delete', async (_event, id: number, expectedProjectPath: string) => {

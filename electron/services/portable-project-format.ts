@@ -5,7 +5,12 @@ import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import fieldPolicyDocument from './portable-project-field-policy.json'
 
 export const PORTABLE_PROJECT_FORMAT_VERSION = 1 as const
-export const PORTABLE_SOURCE_SCHEMA_VERSION = 7 as const
+export const PORTABLE_SOURCE_SCHEMA_VERSION = 8 as const
+/** Legacy packages stay byte-identical on restore; project-open migration upgrades them. */
+export type PortableSourceSchemaVersion = 7 | typeof PORTABLE_SOURCE_SCHEMA_VERSION
+export function isPortableSourceSchemaVersion(value: unknown): value is PortableSourceSchemaVersion {
+  return value === 7 || value === PORTABLE_SOURCE_SCHEMA_VERSION
+}
 
 export type PortableFieldDisposition = 'preserve-domain' | 'historical-nonreplayable'
   | 'redacted-projection' | 'exclude-machine-authority' | 'rebuild-stale'
@@ -15,7 +20,7 @@ export interface PortableFieldPolicy {
   disposition: PortableFieldDisposition
   validator: string
   consumer: string
-  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'registered-donor'
+  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'm07-delta' | 'registered-donor'
   signedDisposition: string | null
 }
 
@@ -28,6 +33,7 @@ const rules = fieldPolicyDocument.rules as unknown as Record<PolicyCode, readonl
 const tables = fieldPolicyDocument.tables as Record<string, Record<string, PolicyCode>>
 const deltaTables = new Set<string>(fieldPolicyDocument.deltaTables)
 const m06Tables = new Set<string>(fieldPolicyDocument.m06Tables)
+const m07Tables = new Set<string>(fieldPolicyDocument.m07Tables)
 const deltaCharacterFields = new Set<string>(fieldPolicyDocument.deltaCharacterFields)
 const optionalFields = new Set<string>(fieldPolicyDocument.optionalFields)
 const signedOverrides = fieldPolicyDocument.signedOverrides as Record<string, string>
@@ -46,7 +52,7 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
     for (const [field, code] of Object.entries(fields)) {
       const rule = rules[code]
       const key = `${table}.${field}`
-      const delta = optionalFields.has(key) || deltaTables.has(table) || m06Tables.has(table)
+      const delta = optionalFields.has(key) || deltaTables.has(table) || m06Tables.has(table) || m07Tables.has(table)
         || table === 'characters' && deltaCharacterFields.has(field)
       const signedDisposition = delta ? null : signedOverrides[key] ?? signedDefaults[code]
       if (!field || !rule || rule.length !== 3 || !PORTABLE_FIELD_DISPOSITIONS.has(rule[0])
@@ -56,7 +62,8 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
       }
       result.set(key, Object.freeze({ disposition: rule[0], validator: rule[1], consumer: rule[2],
         origin: optionalFields.has(key) ? 'registered-donor'
-          : m06Tables.has(table) ? 'm06-delta' : delta ? 'm01-m05-delta' : 'signed-s01', signedDisposition }))
+          : m07Tables.has(table) ? 'm07-delta'
+            : m06Tables.has(table) ? 'm06-delta' : delta ? 'm01-m05-delta' : 'signed-s01', signedDisposition }))
     }
   }
   if (Object.keys(signedOverrides).some(key => result.get(key)?.origin !== 'signed-s01')) {
@@ -79,23 +86,29 @@ export function listPortableFieldPolicyKeys(): readonly string[] {
 function quoteIdentifier(value: string): string { return `"${value.replaceAll('"', '""')}"` }
 
 /** Read-only bidirectional schema gate. sqlite_* implementation objects are deliberately outside the portable contract. */
-export function assertPortableSourceSchema(database: Database.Database): { tables: number; fields: number } {
+export function assertPortableSourceSchema(database: Database.Database,
+  sourceSchemaVersion: PortableSourceSchemaVersion = PORTABLE_SOURCE_SCHEMA_VERSION,
+): { tables: number; fields: number } {
+  if (!isPortableSourceSchemaVersion(sourceSchemaVersion)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
   try {
     database.pragma('foreign_keys = ON')
-    verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+    if (CURRENT_DESKTOP_SCHEMA_VERSION !== PORTABLE_SOURCE_SCHEMA_VERSION) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
+    verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), sourceSchemaVersion)
   } catch { formatError('PORTABLE_SCHEMA_UNSUPPORTED') }
   const actual = new Set<string>()
   const objects = database.prepare("SELECT name,type FROM pragma_table_list WHERE schema='main' AND name NOT LIKE 'sqlite_%' ORDER BY name")
     .all() as Array<{ name: string; type: string }>
   for (const object of objects) {
-    if (object.type !== 'table' || !(object.name in tables)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
+    if (object.type !== 'table' || !(object.name in tables)
+      || sourceSchemaVersion === 7 && m07Tables.has(object.name)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
     for (const row of database.prepare(`PRAGMA table_info(${quoteIdentifier(object.name)})`).all() as Array<{ name: string }>) {
       const key = `${object.name}.${row.name}`
       if (!fieldPolicy.has(key)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
       actual.add(key)
     }
   }
-  if ([...fieldPolicy.keys()].some(key => !actual.has(key) && !optionalFields.has(key))) {
+  if ([...fieldPolicy.keys()].some(key => !actual.has(key) && !optionalFields.has(key)
+    && !(sourceSchemaVersion === 7 && m07Tables.has(key.split('.')[0]!)))) {
     formatError('PORTABLE_SCHEMA_UNSUPPORTED')
   }
   return { tables: objects.length, fields: actual.size }
@@ -121,7 +134,7 @@ export interface PortableProjectManifestEntry {
 
 export interface PortableProjectManifest {
   formatVersion: 1
-  sourceSchemaVersion: 7
+  sourceSchemaVersion: PortableSourceSchemaVersion
   originProjectId: string
   snapshotGeneration: string
   createdAt: string
@@ -239,7 +252,7 @@ export function parsePortableProjectManifest(value: unknown, configuredLimits?: 
   exactKeys(source, ['formatVersion', 'sourceSchemaVersion', 'originProjectId', 'snapshotGeneration', 'createdAt',
     'declaredUncompressedBytes', 'declaredCompressedBytes', 'entries', 'semanticCounts', 'omittedItems',
     'transferReceiptIds', 'historyProjectionIds'])
-  if (source.formatVersion !== PORTABLE_PROJECT_FORMAT_VERSION || source.sourceSchemaVersion !== PORTABLE_SOURCE_SCHEMA_VERSION) {
+  if (source.formatVersion !== PORTABLE_PROJECT_FORMAT_VERSION || !isPortableSourceSchemaVersion(source.sourceSchemaVersion)) {
     formatError('PORTABLE_SCHEMA_UNSUPPORTED')
   }
   const originProjectId = identifier(source.originProjectId)
@@ -302,7 +315,7 @@ export function parsePortableProjectManifest(value: unknown, configuredLimits?: 
   if (new Set(omittedItems.map(item => item.id)).size !== omittedItems.length) formatError('PORTABLE_MANIFEST_INVALID')
   return {
     formatVersion: PORTABLE_PROJECT_FORMAT_VERSION,
-    sourceSchemaVersion: PORTABLE_SOURCE_SCHEMA_VERSION,
+    sourceSchemaVersion: source.sourceSchemaVersion as PortableSourceSchemaVersion,
     originProjectId,
     snapshotGeneration,
     createdAt: source.createdAt,

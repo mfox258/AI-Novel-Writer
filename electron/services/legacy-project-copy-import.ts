@@ -418,7 +418,10 @@ export async function importLegacyProjectCopy(options: {
       checkpoint('history-frozen')
     }
     const verifiedSchema = verifyProjectSqlite({ databasePath: newDatabase })
-    if (verifiedSchema.fingerprint !== migratedSchema.fingerprint || !hasHistory && !isDeepStrictEqual(
+    // Runtime-history redaction may change the main domain, never author save history.
+    if (verifiedSchema.fingerprint !== migratedSchema.fingerprint
+      || !isDeepStrictEqual(verifiedSchema.saveHistoryDomain, migratedSchema.saveHistoryDomain)
+      || !hasHistory && !isDeepStrictEqual(
       verifiedSchema.preAssetDomain ?? verifiedSchema.domain, migratedSchema.preAssetDomain ?? migratedSchema.domain,
     )) fail('LEGACY_IMPORT_SQLITE_VERIFICATION_FAILED')
     if (!hasHistory && !await m05CharacterAssetMigrationAdapter.verify({ sourceSnapshot: avatars, stagingTargetRoot: storage,

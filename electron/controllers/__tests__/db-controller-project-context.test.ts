@@ -57,6 +57,9 @@ const mocks = vi.hoisted(() => ({
   draftListAll: vi.fn((): Array<Record<string, unknown>> => []),
   draftUpdateContent: vi.fn(),
   draftDelete: vi.fn(),
+  draftHistoryList: vi.fn(() => []),
+  draftHistoryGet: vi.fn(() => ({ body: '' })),
+  draftHistoryRestore: vi.fn(() => 20),
   postProcessCreateRun: vi.fn(() => 'run-1'),
   postProcessGetLatestRun: vi.fn(),
   postProcessGetSteps: vi.fn(() => []),
@@ -158,6 +161,10 @@ vi.mock('../../repositories/recovery-candidate-repository', () => ({
     updatePending: mocks.recoveryUpdatePending,
     resolve: mocks.recoveryResolve,
   },
+}))
+
+vi.mock('../../repositories/draft-save-history-repository', () => ({
+  DraftSaveHistoryRepository: { list: mocks.draftHistoryList, get: mocks.draftHistoryGet, restore: mocks.draftHistoryRestore },
 }))
 
 vi.mock('../../repositories/draft-repository', () => ({
@@ -961,6 +968,17 @@ describe('database controller project context guard', () => {
     await expect(handler('db:draft-list-all')({}, 'C:/projects/A'))
       .rejects.toThrow(/项目上下文已切换/)
     expect(mocks.draftListAll).toHaveBeenCalledOnce()
+  })
+
+  it('scopes history reads and restores to the current project', async () => {
+    await expect(handler('db:draft-save-history-list')({}, 1, 'C:/projects/A', 50)).resolves.toEqual([])
+    expect(mocks.draftHistoryList).toHaveBeenCalledWith(1, 50)
+    await expect(handler('db:draft-save-history-get')({}, 1, 2, 'C:/projects/A')).resolves.toEqual({ body: '' })
+    await expect(handler('db:draft-save-history-restore')({}, 1, 2, 'C:/projects/A')).resolves.toEqual({ success: true, id: 20 })
+    mocks.currentProjectPath = 'C:/projects/B'
+    await expect(handler('db:draft-save-history-list')({}, 1, 'C:/projects/A')).rejects.toThrow(/项目上下文已切换/)
+    await expect(handler('db:draft-save-history-restore')({}, 1, 2, 'C:/projects/A')).resolves.toMatchObject({ success: false })
+    expect(mocks.draftHistoryRestore).toHaveBeenCalledTimes(1)
   })
 
   it('rejects unguarded content updates and exposes stable conflict results', async () => {

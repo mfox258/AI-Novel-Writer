@@ -47,6 +47,11 @@ it('真实version1文件经唯一M01升级，关闭重开不重跑且正文不�
   expect(getProjectDb()!.prepare('SELECT count(*) FROM generation_runs').pluck().get()).toBe(0)
   closeProjectDatabase()
   const upgraded = probeProjectSqlite({ databasePath: f.file }); expect(upgraded.preIdentityDomain).toEqual(before.domain)
+  expect(upgraded.domain.tableCounts.draft_save_history).toBe(1)
+  const check = new Database(f.file, { readonly: true })
+  try { expect(check.prepare('SELECT draft_id,body FROM draft_save_history').all()).toEqual([
+    { draft_id: 1, body: '铜钥匙\r\n作者原文' },
+  ]) } finally { check.close() }
   initProjectDatabase(f.root); closeProjectDatabase()
   expect(probeProjectSqlite({ databasePath: f.file })).toEqual(upgraded)
 })

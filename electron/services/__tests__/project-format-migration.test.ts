@@ -1,4 +1,6 @@
-import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { migrateSchema } from '../../migrations/runner'
+import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { createRequire } from 'node:module'
 import * as lance from '@lancedb/lancedb'
 import { Field, Schema, Utf8, Int32 } from 'apache-arrow'
@@ -40,7 +42,8 @@ function fixture() {
   put(path.join(legacy, 'unknown.txt'), 'preserved only')
   const evidence = (database: string, schemaVersion: number): ProjectSqliteEvidence => ({ schemaVersion, fingerprint: `fixture-schema-${schemaVersion}`,
     domain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') },
-    ...(schemaVersion >= 3 ? { preIdentityDomain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') } } : {}) })
+    ...(schemaVersion >= 3 ? { preIdentityDomain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') } } : {}),
+    ...(schemaVersion >= 8 ? { preHistoryDomain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') } } : {}) })
   // This suite validates coordination with deterministic adapters; real SQLite/WAL/Lance tests are separate.
   const dependencies: ProjectMigrationDependencies<{ empty: true }, FixtureCharacterAssetReceipt> = {
     databaseName: 'project.db', closeHandles: async () => {},
@@ -331,6 +334,91 @@ it.each(['missing-old-projection', 'changed-current-domain'] as const)('refuses 
   }
   const result = await migrateProjectFormat(options)
   expect(result).toMatchObject({ state: 'blocked', code: mode === 'missing-old-projection' ? 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' : 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' })
+  expect(fs.existsSync(options.legacy)).toBe(true)
+  expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
+})
+
+it.each([7, 8] as const)('migrates real schema %s with old author rows intact and save history independently verified', async version => {
+  const options = fixture()
+  const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+  const file = path.join(options.legacy, 'vela.db')
+  fs.unlinkSync(file)
+  // Build qualified DDL in memory; exercise the actual conversion against the file below.
+  const source = new Database(':memory:')
+  try {
+    source.pragma('foreign_keys = ON')
+    initializeLegacyBaselineSchema(source)
+    migrateSchema(new SqliteSchemaAdapter(source), getDesktopMigrationRegistry(), version)
+    source.exec("INSERT INTO contents(body) VALUES('初稿'); INSERT INTO drafts(chapter_number,version,content_id) VALUES(1,1,1)")
+    source.prepare('UPDATE contents SET body=? WHERE id=1').run('保留作者当前正文')
+    await source.backup(file)
+  } finally { source.close() }
+  const beforeBytes = fs.readFileSync(file)
+  const before = probeProjectSqlite({ databasePath: file })
+  const dependencies = { ...options.dependencies,
+    probeSqlite: (databasePath: string) => probeProjectSqlite({ databasePath }),
+    backupSqlite: (sourceDatabasePath: string, targetDatabasePath: string) => backupProjectSqlite({ sourceDatabasePath, targetDatabasePath }),
+    verifySqlite: (databasePath: string) => verifyProjectSqlite({ databasePath }),
+  }
+  const result = await migrateProjectFormat({ ...options, dependencies })
+  expect(result).toMatchObject({ state: 'ready' })
+  if (result.state !== 'ready') throw new Error('real schema migration blocked')
+  const after = verifyProjectSqlite({ databasePath: path.join(result.storageRoot, 'project.db') })
+  expect(version === 7 ? after.preHistoryDomain : after.domain).toEqual(before.domain)
+  expect(after.domain.tableCounts.draft_save_history).toBe(version === 7 ? 1 : 2)
+  const db = new Database(path.join(result.storageRoot, 'project.db'), { readonly: true })
+  try {
+    expect(db.prepare('SELECT body FROM draft_save_history ORDER BY id').pluck().all())
+      .toEqual(version === 7 ? ['保留作者当前正文'] : ['初稿', '保留作者当前正文'])
+  } finally { db.close() }
+  expect(fs.readFileSync(path.join(options.projectRoot, '.ai-novel-migration', `${result.migrationId}.legacy`, 'vela.db')))
+    .toEqual(beforeBytes)
+})
+
+it.each(['missing-pre-history', 'changed-pre-history', 'changed-current-history'] as const)(
+  'rejects %s rather than accepting a projection that hides author changes', async mode => {
+    const options = fixture(), backup = options.dependencies.backupSqlite, probe = options.dependencies.probeSqlite
+    options.dependencies.probeSqlite = file => ({ ...probe(file), schemaVersion: mode === 'changed-current-history' ? 8 : 7 })
+    options.dependencies.backupSqlite = async (...args) => {
+      const result = await backup(...args)
+      if (mode === 'missing-pre-history') { const copy = { ...result }; delete copy.preHistoryDomain; return copy }
+      if (mode === 'changed-pre-history') return { ...result, preHistoryDomain: { ...result.domain, authorContentHash: 'changed-old-author-data' } }
+      return { ...result, domain: { ...result.domain, authorContentHash: 'changed-current-history' } }
+    }
+    expect(await migrateProjectFormat(options)).toMatchObject({ state: 'blocked', code: 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' })
+    expect(fs.existsSync(options.legacy)).toBe(true)
+    expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
+  },
+)
+
+it('rejects a changed save-history row after the old-domain comparison succeeds', async () => {
+  const options = fixture()
+  const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+  const file = path.join(options.legacy, 'vela.db')
+  fs.unlinkSync(file)
+  const source = new Database(':memory:')
+  try {
+    initializeLegacyBaselineSchema(source)
+    migrateSchema(new SqliteSchemaAdapter(source), getDesktopMigrationRegistry(), 7)
+    source.exec("INSERT INTO contents(body) VALUES('作者原文'); INSERT INTO drafts(chapter_number,version,content_id) VALUES(1,1,1)")
+    await source.backup(file)
+  } finally { source.close() }
+  const migrateAssets = options.dependencies.characterAssets.migrate
+  const dependencies = { ...options.dependencies,
+    probeSqlite: (databasePath: string) => probeProjectSqlite({ databasePath }),
+    backupSqlite: (sourceDatabasePath: string, targetDatabasePath: string) => backupProjectSqlite({ sourceDatabasePath, targetDatabasePath }),
+    verifySqlite: (databasePath: string) => verifyProjectSqlite({ databasePath }),
+    characterAssets: { ...options.dependencies.characterAssets, migrate: async (input: Parameters<typeof migrateAssets>[0]) => {
+      const receipt = await migrateAssets(input)
+      const db = new Database(input.stagingDatabasePath)
+      try { db.exec('INSERT INTO draft_save_history(draft_id,body) SELECT d.id,c.body FROM drafts d JOIN contents c ON c.id=d.content_id') }
+      finally { db.close() }
+      return receipt
+    } },
+  }
+  expect(await migrateProjectFormat({ ...options, dependencies })).toMatchObject({
+    state: 'blocked', code: 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED',
+  })
   expect(fs.existsSync(options.legacy)).toBe(true)
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
