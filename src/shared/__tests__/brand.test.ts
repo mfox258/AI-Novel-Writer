@@ -17,10 +17,10 @@ const legacyHiddenDirPattern = new RegExp('\\.' + 've' + 'la(?!API)', 'i')
 const legacyPrefixPattern = new RegExp('ve' + 'la-', 'i')
 
 describe('APP_BRAND', () => {
-  it('uses AI小说作家 visible product language', () => {
-    expect(APP_BRAND.zhName).toBe('AI小说作家')
-    expect(APP_BRAND.enName).toBe('AI Novel Writer')
-    expect(APP_BRAND.shortName).toBe('AI小说作家')
+  it('uses WenYuan visible product language', () => {
+    expect(APP_BRAND.zhName).toBe('文渊')
+    expect(APP_BRAND.enName).toBe('WenYuan')
+    expect(APP_BRAND.shortName).toBe('文渊')
     expect(Object.values(APP_BRAND).join(' ')).not.toMatch(legacyNamePattern)
   })
 

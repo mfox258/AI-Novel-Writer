@@ -23,6 +23,7 @@ beforeEach(() => {
   setActiveProjectSessionContext(session)
   invoke = vi.fn(async (channel: string, id?: number) => {
     if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1, title: '雨夜来信' }]
+    if (channel === 'db:draft-list-all') return []
     if (channel === 'db:draft-list') return [{ id: 1, version: 1, status: 'draft', wordCount: 900, createdAt: '2026-09-13T00:00:00Z' }]
     if (channel === 'db:draft-get-full') return { content: id === 1 ? '旧版中文正文。' : '新版中文正文。' }
     if (channel === 'db:draft-get-latest') return { id: 2 }
@@ -43,4 +44,27 @@ it('中文历史比较通过新桥接打开规范URI并保留两份原文', asyn
   await act(async () => host.querySelector<HTMLElement>('[title="与当前版本对比"]')?.click())
   await vi.waitFor(() => expect(useEditorStore.getState().tabs).toHaveLength(1))
   expect(useEditorStore.getState().tabs[0]).toMatchObject({ type: 'diff', filePath: 'ai-novel://draft/ch1', originalContent: '旧版中文正文。', content: '新版中文正文。', projectKey: projectPath })
+})
+
+it('无蓝图的空正文可从历史发现、对比并恢复为新草稿', async () => {
+  invoke.mockImplementation(async (channel: string) => {
+    if (channel === 'db:blueprint-get-all') return []
+    if (channel === 'db:draft-list-all') return [{ id: 1, chapterNumber: 2, version: 1, status: 'draft', wordCount: 0, createdAt: '2026-10-17' }]
+    if (channel === 'db:draft-list') return [{ id: 1, version: 1, status: 'draft', wordCount: 0, createdAt: '2026-10-17' }]
+    if (channel === 'db:draft-get-full') return { content: '' }
+    if (channel === 'db:draft-get-latest') return { id: 1 }
+    if (channel === 'db:draft-create') return { success: true, id: 2 }
+    throw new Error(`Unexpected IPC: ${channel}`)
+  })
+  await act(async () => root.render(<VersionHistory projectKey={projectPath} />))
+  await vi.waitFor(() => expect(host.textContent).toContain('第2章'))
+  await act(async () => host.querySelector<HTMLElement>('.cursor-pointer')?.click())
+  await vi.waitFor(() => expect(host.querySelector('[title="与当前版本对比"]')).not.toBeNull())
+  await act(async () => host.querySelector<HTMLElement>('[title="与当前版本对比"]')?.click())
+  expect(useEditorStore.getState().tabs[0]).toMatchObject({ originalContent: '', content: '' })
+  await act(async () => host.querySelector<HTMLElement>('[title="回退到此版本"]')?.click())
+  await vi.waitFor(() => expect(invoke.mock.calls.some(call => call[0] === 'db:draft-create')).toBe(true))
+  const request = invoke.mock.calls.find(call => call[0] === 'db:draft-create')
+  expect(request?.[1]).toMatchObject({ chapterNumber: 2, content: '', wordCount: 0 })
+  expect(invoke.mock.calls.some(call => call[0] === 'db:draft-next-version')).toBe(false)
 })

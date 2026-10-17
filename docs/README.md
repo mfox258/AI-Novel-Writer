@@ -4,6 +4,8 @@
 
 ## 先找到需要的文档
 
+- [文渊重构](wenyuan/README.md)记录2026-10-17起的平台迁移、规范映射、首批行为和仍未实现的边界。
+
 - [中文使用说明](../README.md)介绍安装、写作、模型配置、旧项目导入和备份。[中文副本](../README_zh.md)保持相同内容。
 
 - [English user guide](../README_en.md) covers the same desktop behavior in English.

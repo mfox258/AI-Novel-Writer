@@ -1,3 +1,6 @@
+import type { ProjectSessionContext } from '../shared/ipc-channels'
+import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../components/project-session-gate'
+import { useProjectStore } from '../stores/project-store'
 /**
  * version-service — 版本历史数据访问服务
  *
@@ -29,17 +32,32 @@ export interface VersionRecord {
   dependencies_stale: boolean
 }
 
-/** 获取项目的所有章节 (现在从蓝图获取) */
-export async function getChapters(expectedProjectPath: string): Promise<ChapterRecord[]> {
-  const blueprints = (await ipc.invoke('db:blueprint-get-all', expectedProjectPath)) as unknown as Array<Record<string, unknown>>
-  return blueprints.map(bp => ({
-    chapter_id: String(bp.chapterNumber),
-    file_path: '',
-    file_name: String(bp.title || `第 ${bp.chapterNumber} 章`),
-    updated_at: '',
-    chapter_number: bp.chapterNumber as number,
-    status: 'draft',
-  }))
+/** 合并蓝图和草稿章节，包括不依赖蓝图的手写章节。 */
+export async function getChapters(expectedProjectPath: string, expectedSession?: ProjectSessionContext): Promise<ChapterRecord[]> {
+  const session = expectedSession ?? captureProjectSession(useProjectStore.getState().currentProject)
+  if (!session || !isProjectSessionPath(session, expectedProjectPath) || !isProjectSessionCurrent(session)) return []
+  const [blueprints, drafts] = await Promise.all([
+    ipc.invokeWithProjectSession(session, 'db:blueprint-get-all', expectedProjectPath),
+    ipc.invokeWithProjectSession(session, 'db:draft-list-all', expectedProjectPath),
+  ])
+  if (!isProjectSessionCurrent(session)) return []
+  const chapters = new Map<number, ChapterRecord>()
+  for (const draft of [...drafts].sort((a, b) => a.version - b.version)) {
+    chapters.set(draft.chapterNumber, {
+      chapter_id: String(draft.chapterNumber), chapter_number: draft.chapterNumber,
+      file_path: '', file_name: draft.chapterTitle || '',
+      updated_at: draft.createdAt, status: draft.status,
+    })
+  }
+  for (const bp of blueprints) {
+    const prior = chapters.get(bp.chapterNumber)
+    chapters.set(bp.chapterNumber, {
+      chapter_id: String(bp.chapterNumber), chapter_number: bp.chapterNumber,
+      file_path: '', file_name: bp.title || prior?.file_name || '',
+      updated_at: prior?.updated_at ?? '', status: prior?.status ?? 'draft',
+    })
+  }
+  return [...chapters.values()].sort((a, b) => a.chapter_number - b.chapter_number)
 }
 
 /** 获取章节的版本列表 (草稿列表) */
@@ -60,7 +78,7 @@ export async function getChapterVersions(chapterId: string, expectedProjectPath:
 /** 获取版本内容 */
 export async function getVersionContent(versionId: number, expectedProjectPath: string): Promise<string | null> {
   const draft = (await ipc.invoke('db:draft-get-full', versionId, expectedProjectPath)) as { content?: string } | null
-  return draft?.content || null
+  return draft?.content ?? null
 }
 
 /** 获取章节最新内容（取代之前的文件读取） */
@@ -68,15 +86,14 @@ export async function getChapterLatestContent(chapterNumber: number, expectedPro
   const draft = (await ipc.invoke('db:draft-get-latest', chapterNumber, expectedProjectPath)) as { id?: number } | null
   if (!draft || draft.id === undefined) return '（章节尚无内容）'
   const full = (await ipc.invoke('db:draft-get-full', draft.id, expectedProjectPath)) as { content?: string } | null
-  return full?.content || '（内容被错误截断）'
+  return full?.content ?? '（内容被错误截断）'
 }
 
 /** 回退到某个历史版本，创建新草稿 */
 export async function revertToVersion(chapterNumber: number, content: string, expectedProjectPath: string): Promise<boolean> {
-  const nextVer: number = await ipc.invoke('db:draft-next-version', chapterNumber, expectedProjectPath)
   const res = await ipc.invoke('db:draft-create', {
     chapterNumber,
-    version: nextVer,
+    version: 1, // Server allocates the version.
     source: 'rewrite',
     content,
     wordCount: countDraftUnits(content),

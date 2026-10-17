@@ -17,13 +17,12 @@ import { useWorkflowStore } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
 import { openBuiltinEditor } from '../panels/sidebar/sidebar-file-openers'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useWorkbenches } from '../../hooks/use-workbenches'
+import { legacyNovelWorkbenchId } from '../../bootstrap/workbench'
 
 /** 左侧侧边栏视图按钮配置（不含 Home，它单独渲染） */
-const sidebarActivities: Array<{ id: SidebarView; icon: typeof FolderOpen; zh: string; en: string }> = [
-  { id: 'project', icon: FolderOpen, zh: '项目', en: 'Project' },
-  { id: 'knowledge', icon: BookOpen, zh: '小说', en: 'Novel' },
-  { id: 'characters', icon: Users, zh: '角色', en: 'Cast' },
-]
+const activityIcons = { folder: FolderOpen, book: BookOpen, users: Users }
+const isSidebarView = (view: string): view is SidebarView => ['project', 'knowledge', 'characters'].includes(view)
 
 /** 底部面板 Tab 按钮配置 */
 const bottomTabs: Array<{ id: BottomTab; icon: typeof ListChecks; zh: string; en: string }> = [
@@ -80,6 +79,9 @@ export default function LeftToolWindowBar() {
   const openSettings = useLayoutStore(s => s.openSettings)
   const currentRun = useWorkflowStore(s => s.currentRun)
   const text = useLocaleStore(s => s.text)
+  const workbenches = useWorkbenches()
+  const sidebarActivities = workbenches.workbenches.flatMap(workbench => workbench.activities)
+  const novelEditorsAvailable = workbenches.workbenches.some(workbench => workbench.id === legacyNovelWorkbenchId)
 
   /** Home 按钮是否激活 */
   const homeActive = activeRailItem === 'home' || (!currentProject && sidebarView === 'project')
@@ -109,12 +111,14 @@ export default function LeftToolWindowBar() {
         <div className="writer-nav-divider w-8 my-1" style={{ height: 1 }} />
 
         {/* 侧边栏视图按钮 */}
-        {sidebarActivities.map(({ id, icon: Icon, zh, en }) => {
-          const label = text(zh, en)
+        {sidebarActivities.map(({ id: contributionId, view: id, icon, label: copy }) => {
+          if (!isSidebarView(id)) return null
+          const Icon = activityIcons[icon]
+          const label = text(copy.zh, copy.en)
           const isActive = activeRailItem === id && !(id === 'project' && homeActive)
           return (
             <LeftNavButton
-              key={id}
+              key={contributionId}
               icon={Icon}
               label={label}
               active={isActive}
@@ -126,6 +130,7 @@ export default function LeftToolWindowBar() {
 
         <div className="writer-nav-divider w-8 my-1" style={{ height: 1 }} />
 
+        {novelEditorsAvailable && <>
         <LeftNavButton
           icon={ListTree}
           label={text('蓝图', 'Plot')}
@@ -173,6 +178,7 @@ export default function LeftToolWindowBar() {
             openBuiltinEditor('version-history', text('版本历史', 'Version history'), 'version-history')
           }}
         />
+        </>}
       </div>
 
       {/* 弹性间隔 */}

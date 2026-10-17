@@ -5,10 +5,12 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import { Button } from '../ui/Button'
 import { cn } from '../../lib/utils'
+import { getChapters } from '../../services/version-service'
 import type { VersionRecord } from '../../services/version-service'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
 import { countDraftUnits } from '../../shared/draft-units'
+import { globalEventBus } from '../../shared/event-bus'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
@@ -38,17 +40,11 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     setLoading(true)
     try {
-      const blueprints = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:blueprint-get-all',
-        projectSession.projectPath,
-      )
+      const records = await getChapters(projectSession.projectPath, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
-      setChapters(blueprints.map(c => ({
-        id: String(c.chapterNumber),
-        chapter_number: c.chapterNumber,
-        title: c.title || text(`第 ${c.chapterNumber} 章`, `Chapter ${c.chapterNumber}`),
-        status: 'draft',
+      setChapters(records.map(c => ({
+        id: c.chapter_id, chapter_number: c.chapter_number,
+        title: c.file_name || text(`第${c.chapter_number}章`, `Chapter ${c.chapter_number}`), status: c.status,
       })))
     } catch {
       if (isProjectSessionCurrent(projectSession)) setChapters([])
@@ -98,6 +94,14 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
     return () => { mounted = false }
   }, [loadVersions, selectedChapter])
 
+  useEffect(() => globalEventBus.on('REFRESH_RESOURCE', event => {
+    if (!isProjectSessionCurrent(event.projectSession)
+      || !isProjectSessionPath(event.projectSession, projectKey)
+      || !event.resources.some(resource => ['drafts', 'blueprints', 'all'].includes(resource))) return
+    void loadChapters()
+    if (selectedChapter) void loadVersions(selectedChapter)
+  }), [loadChapters, loadVersions, projectKey, selectedChapter])
+
   /** 查看版本内容（Diff 对比） */
   const handleDiff = async (versionId: number, versionLabel: string) => {
     const projectSession = captureProjectSession(currentProject)
@@ -112,7 +116,7 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
       projectSession.projectPath,
     ))?.content
     if (!isProjectSessionCurrent(projectSession)) return
-    if (!oldContent) return
+    if (oldContent == null) return
 
     // 获取最新草稿内容进行比对
     const latestDraft = await ipc.invokeWithProjectSession(
@@ -133,7 +137,7 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
     if (!isProjectSessionCurrent(projectSession)) return
     const currentContent = latestDraft?.id === undefined
       ? text('（章节尚无内容）', '(Chapter has no content yet)')
-      : (latestContent?.content || text('（内容被错误截断）', '(Content was truncated unexpectedly)'))
+      : (latestContent?.content ?? text('（内容被错误截断）', '(Content was truncated unexpectedly)'))
 
     useEditorStore.getState().openFile({
       id: `diff-version-${versionId}`,
@@ -160,21 +164,14 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
       projectSession.projectPath,
     ))?.content
     if (!isProjectSessionCurrent(projectSession)) return
-    if (!content) return
+    if (content == null) return
 
-    const nextVersion = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:draft-next-version',
-      chapter.chapter_number,
-      projectSession.projectPath,
-    )
-    if (!isProjectSessionCurrent(projectSession)) return
     requireIpcSuccess(await ipc.invokeWithProjectSession(
       projectSession,
       'db:draft-create',
       {
         chapterNumber: chapter.chapter_number,
-        version: nextVersion,
+        version: 1, // Server allocates the version.
         source: 'rewrite',
         content,
         wordCount: countDraftUnits(content),

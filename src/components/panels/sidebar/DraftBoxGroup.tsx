@@ -2,6 +2,8 @@
  * DraftBoxGroup — 草稿箱折叠组（含章节分组和单条草稿条目）
  */
 
+import ManualManuscriptDialog from '../../dialogs/ManualManuscriptDialog'
+import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { useState, useEffect } from 'react'
 import { ChevronRight, ChevronDown, CheckCircle2, Circle, FileText, FolderOpen, Copy, Trash2, FilePen } from 'lucide-react'
 import type { DraftMeta } from '../../../stores/draft-store'
@@ -33,9 +35,11 @@ export default function DraftBoxGroup({
 }: {
   draftsByChapter: Record<number, DraftMeta[]>
 }) {
+  const [manualSession, setManualSession] = useState<ProjectSessionContext | null>(null)
   const [open, setOpen] = useState(true)
   const text = useLocaleStore(s => s.text)
-  const projectKey = useProjectStore(s => s.currentProject?.path)
+  const currentProject = useProjectStore(s => s.currentProject)
+  const projectKey = currentProject?.path
   if (!projectKey) return null
 
   // 所有章节号排序
@@ -50,12 +54,15 @@ export default function DraftBoxGroup({
 
   return (
     <div>
+      {manualSession && isProjectSessionCurrent(manualSession) && <ManualManuscriptDialog
+        key={manualSession.leaseId} session={manualSession} onClose={() => setManualSession(null)}
+      />}
       {/* 草稿箱标题行 */}
       <div
         className="tree-item gap-1.5 cursor-pointer select-none"
         style={{ paddingLeft: 10 }}
         onClick={() => setOpen(v => !v)}
-        title={text('草稿箱：AI 生成后的章节草稿在此管理，定稿后进入正文章节', 'Draft box: manage AI-generated drafts here. Finalized drafts move to the manuscript.')}
+        title={text('草稿箱：管理手写或 AI 生成的章节草稿，定稿后进入正文章节', 'Draft box: manage manual or AI-generated drafts. Finalized drafts move to the manuscript.')}
       >
         {open
           ? <ChevronDown size={12} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
@@ -63,6 +70,14 @@ export default function DraftBoxGroup({
         }
         <FilePen size={14} style={{ color: 'var(--color-text-muted)' }} />
         <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('草稿箱', 'Draft box')}</span>
+        <button type="button" className="ml-auto rounded p-1 hover:bg-[var(--color-hover)]"
+          title={text('新建空白正文', 'New blank manuscript')}
+          aria-label={text('新建空白正文', 'New blank manuscript')}
+          onClick={e => {
+            e.stopPropagation()
+            const session = captureProjectSession(useProjectStore.getState().currentProject)
+            if (session && isProjectSessionPath(session, projectKey)) setManualSession(session)
+          }}><FilePen size={13} /></button>
         {activeChapterCount > 0 && (
           <span className="ml-auto text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
             {text(`${activeChapterCount} 章`, `${activeChapterCount} chapters`)}
@@ -77,7 +92,7 @@ export default function DraftBoxGroup({
               className="text-xs py-1"
               style={{ paddingLeft: 34, color: 'var(--color-text-muted)' }}
             >
-              {text('暂无草稿（从章节蓝图点击「写作此章」创作）', 'No drafts. Use “Write chapter” from a chapter blueprint.')}
+              {text('暂无草稿。可新建空白正文，或从章节蓝图点击「写作此章」。', 'No drafts. Create a blank manuscript or use “Write chapter” from a blueprint.')}
             </div>
           ) : (
             chapterNums.map(chNum => (

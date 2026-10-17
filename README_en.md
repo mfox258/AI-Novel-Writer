@@ -8,11 +8,13 @@
   <img src="docs/assets/readme/ai-novel-writer-logo-transparent.png" width="104" height="104" alt="AI Novel Writer Logo" />
 </p>
 
-<h1 align="center">AI Novel Writer / AI 小说作家</h1>
+<h1 align="center">WenYuan / 文渊</h1>
 
 <p align="center">
-  An AI-powered novel writing studio designed to plan, draft, and refine long-form fiction.. It organizes “premise → characters → worldbuilding → chapter blueprints → draft → review → revision → final” as a traceable writing workflow. You configure the model; your project material stays on your computer.
+  A local-first creative workspace, being refactored from AI Novel Writer into WenYuan. Long-form fiction is the first workbench, with manual writing and optional AI assistance. You configure the model; your project material stays on your computer.
 </p>
+
+The current source adds **Project → Draft box → New blank manuscript**, with no model or blueprint required. History includes drafts without blueprints, and empty text can be compared and restored as a new draft. Immutable history for every save and full extension installation/permission services are still being developed; see the [refactoring record](docs/wenyuan/README.md). The release links below remain the existing software's distribution channels and do not imply these changes have shipped.
 
 <p align="center">
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>

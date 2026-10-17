@@ -17,13 +17,26 @@ import {
   type SidebarMenuState,
 } from './sidebar/sidebar-menu'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useWorkbenches } from '../../hooks/use-workbenches'
+
+const hostViews = { project: ProjectTree, knowledge: KnowledgePanel, characters: CharactersView }
 
 /** 左侧面板 */
 export default function Sidebar() {
   const sidebarView = useLayoutStore(s => s.sidebarView)
   const text = useLocaleStore(s => s.text)
+  const workbenches = useWorkbenches()
+  const contribution = workbenches.workbenches.flatMap(item => item.activities)
+    .find(item => item.view === sidebarView)
+  const Content = contribution && Object.hasOwn(hostViews, contribution.view)
+    ? hostViews[contribution.view as keyof typeof hostViews] : undefined
   // 全局右键菜单状态
   const [sidebarMenu, setSidebarMenu] = useState<SidebarMenuState | null>(null)
+  useEffect(() => {
+    let current = true
+    queueMicrotask(() => { if (current) setSidebarMenu(null) })
+    return () => { current = false }
+  }, [contribution])
 
   // 注册 / 注销右键菜单 setter
   useEffect(() => {
@@ -47,17 +60,20 @@ export default function Sidebar() {
       }}
     >
       <div className="panel-header">
-        <span>{viewTitles[sidebarView]}</span>
+        <span>{contribution ? text(contribution.label.zh, contribution.label.en) : viewTitles[sidebarView]}</span>
       </div>
       <div className="flex-1 overflow-y-auto py-1">
         {sidebarView === 'home'       && <HomeSidebarPanel />}
-        {sidebarView === 'project'    && <ProjectTree />}
-        {sidebarView === 'knowledge'  && <KnowledgePanel />}
-        {sidebarView === 'characters' && <CharactersView />}
+        {sidebarView !== 'home' && Content && <Content />}
+        {sidebarView !== 'home' && !Content && <p role="status" className="p-3 text-sm">
+          {workbenches.state === 'loading'
+            ? text('正在装载工作台…', 'Loading workbench…')
+            : text('工作台暂不可用，作品数据仍保留。', 'Workbench unavailable. Your project data is retained.')}
+        </p>}
       </div>
 
       {/* 动态右键菜单 */}
-      {sidebarMenu && (
+      {sidebarMenu && contribution && (
         <ContextMenu
           items={sidebarMenu.items}
           position={sidebarMenu.position}

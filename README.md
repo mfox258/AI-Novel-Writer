@@ -8,7 +8,7 @@
   <img src="docs/assets/readme/ai-novel-writer-logo-transparent.png" width="104" height="104" alt="AI 小说作家 Logo" />
 </p>
 
-<h1 align="center">AI 小说作家 / AI Novel Writer</h1>
+<h1 align="center">文渊 / WenYuan</h1>
 
 <div align="center">
 
@@ -17,8 +17,10 @@
 </div>
 
 <p align="center">
-  面向AI长篇小说创作的桌面工作台。它把“前提 → 角色 → 世界观 → 章节蓝图 → 草稿 → 审稿 → 修稿 → 定稿”组织为一条可追溯的创作流程；模型由你自行配置，项目资料留在你的电脑上。
+  本地优先的创作工作台，正在从 AI 小说作家逐步重构为文渊平台。长篇小说是首个工作台，支持人工写作与可选的 AI 辅助；模型由你自行配置，项目资料留在你的电脑上。
 </p>
+
+当前源码新增“项目 → 草稿箱 → 新建空白正文”，无需模型或章节蓝图即可开始写作。历史页面可找到无蓝图草稿，空正文也可比较并恢复为新草稿。每次保存的不可变修订历史及完整插件安装/权限体系仍在改造中，详见[文渊重构记录](docs/wenyuan/README.md)。以下发布链接仍对应原软件正式发布渠道，不代表这些改造已发布。
 
 <p align="center">
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>

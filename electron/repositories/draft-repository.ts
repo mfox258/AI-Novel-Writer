@@ -476,21 +476,24 @@ export class DraftRepository {
 
     /** 更新草稿正文（同时更新 contents 表） */
     static updateContent(id: number, content: string, wordCount: number): void {
-        const meta = DraftRepository.getMeta(id)
-        if (!meta) return
-        if (meta.status === 'finalized') {
-            throw new Error('已定稿正文为不可变事实；如需再编辑，请创建新草稿或处理定稿冲突')
-        }
-
-        ContentRepository.updateBody(meta.contentId, content)
-
         const db = getProjectDb()
-        if (!db) return
-
-        db.prepare(`
-      UPDATE drafts SET word_count = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(wordCount, id)
+        if (!db) throw new Error('[DraftRepository] 数据库未连接')
+        db.transaction(() => {
+            // Recheck status in the same transaction as both writes. Metadata
+            // failure must roll back the body instead of reporting a failed save
+            // after the author's text has already changed.
+            const target = db.prepare('SELECT status, content_id FROM drafts WHERE id = ?')
+                .get(id) as { status: string; content_id: number } | undefined
+            if (!target) throw new Error(`草稿不存在：${id}`)
+            if (target.status === 'finalized') {
+                throw new Error('已定稿正文为不可变事实；如需再编辑，请创建新草稿或处理定稿冲突')
+            }
+            const updated = db.prepare('UPDATE contents SET body = ? WHERE id = ?').run(content, target.content_id)
+            if (updated.changes !== 1) throw new Error('草稿正文记录不存在')
+            db.prepare(`
+              UPDATE drafts SET word_count = ?, updated_at = datetime('now') WHERE id = ?
+            `).run(wordCount, id)
+        })()
     }
 
     /** 删除草稿（级联删除 revisions/reviews，但 contents 需手动清理） */

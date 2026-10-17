@@ -1,8 +1,8 @@
 export const APP_BRAND = {
-  zhName: 'AI小说作家',
-  enName: 'AI Novel Writer',
-  shortName: 'AI小说作家',
-  tagline: '本地优先的 AI 长篇小说创作 IDE',
-  taglineEn: 'A local-first IDE for long-form fiction',
+  zhName: '文渊',
+  enName: 'WenYuan',
+  shortName: '文渊',
+  tagline: '本地优先的创作工作台',
+  taglineEn: 'A local-first creative workspace',
   assistantName: 'AI 写作助手',
 } as const
